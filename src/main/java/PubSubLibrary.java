@@ -1,5 +1,8 @@
+import com.sun.xml.internal.bind.v2.model.core.MaybeElement;
+
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -8,7 +11,7 @@ public class PubSubLibrary {
 
     private static volatile PubSubLibrary INSTANCE = null;
 
-    private Map<Class<?>, Map<Object, List<?>>> myMap = new ConcurrentHashMap<>();
+    private Map<Class<?>, Map<Object, List<Method>>> myMap = new ConcurrentHashMap<>();
 
     private PubSubLibrary() {
         //no-op
@@ -33,15 +36,27 @@ public class PubSubLibrary {
             Annotation[] annotations = method.getAnnotations();
             for (Annotation annotation : annotations) {
                 if (annotation instanceof Subscriber) {
-                    System.out.println("Found one method annotated with Subscriber with name: " + method.getName());
                     if (method.getParameterCount() != 1) {
                         throw new RuntimeException("method annotated with Subscriber can only have one parameter");
                     } else {
                         Class<?> clazzz = method.getParameterTypes()[0];
-                        if (myMap.containsKey(clazzz)) {
-
-                        } else {
-
+                        synchronized (this) {
+                            if (myMap.containsKey(clazzz)) {
+                                Map<Object, List<Method>> mySecondMap = myMap.get(clazzz);
+                                if (mySecondMap.containsKey(object)) {
+                                    mySecondMap.get(object).add(method);
+                                } else {
+                                    List<Method> methodList = new ArrayList<>();
+                                    methodList.add(method);
+                                    mySecondMap.put(object, methodList);
+                                }
+                            } else {
+                                Map<Object, List<Method>> map = new ConcurrentHashMap<>();
+                                List<Method> methodList = new ArrayList<>();
+                                methodList.add(method);
+                                map.put(object, methodList);
+                                myMap.put(clazzz, map);
+                            }
                         }
                     }
                 }
@@ -49,13 +64,25 @@ public class PubSubLibrary {
         }
     }
 
-    public <T> void publish(IEvent<T> event) {
+    public <T> void publish(IEvent<T> event) throws Exception {
         if (event == null) {
             throw new NullPointerException("method argument can not be null!");
         }
 
         Class<?> clazz = event.getClass();
-
-
+        synchronized (this) {
+            if (myMap.containsKey(clazz)) {
+                Map<Object, List<Method>> mySecondMap = myMap.get(clazz);
+                for (Map.Entry<Object, List<Method>> entry : mySecondMap.entrySet()) {
+                    Object object = entry.getKey();
+                    List<Method> methodList = entry.getValue();
+                    for (Method method : methodList) {
+                        method.invoke(object, event);
+                    }
+                }
+            } else {
+                System.out.println("The event: " + clazz.toString() + " has no subscriber, thus no method has been invoked at this time");
+            }
+        }
     }
 }
